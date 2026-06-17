@@ -161,12 +161,45 @@ MIT — see [LICENSE](LICENSE).
 - **基于角色的权限控制** — admin/manager/analyst/viewer，JWT 鉴权
 - **完整审计日志** — 创建/更新/删除/注销等操作全记录
 
+**运营与管理（v2）**
+- **数据导入导出** — 任意实体的 CSV/Excel 批量任务
+- **定时任务** — cron 驱动的周期任务，支持运行/暂停
+- **预警告警** — 阈值/异常/趋势告警，支持确认与解决工作流
+- **消息通知** — email/sms/webhook 发送，含模板与重试
+- **API 密钥管理** — 按组织隔离的编程访问（X-API-Key 头）
+- **Webhook 订阅** — 事件驱动的外发投递，含失败计数
+- **文件附件** — 关联任意实体的多态文件存储
+- **报告导出** — 碳报告渲染为 PDF/Excel
+- **审计回滚** — 基于快照的破坏性变更撤销（管理员）
+- **系统设置** — 按 category 分组的运行时配置中心
+
 ### 技术栈
 - Go 1.22 + Gin（HTTP 框架）
 - PostgreSQL 16（主存储）+ Redis 7（缓存/队列）
 - `database/sql` + `lib/pq`（无 ORM，原生 SQL）
 - `golang-jwt/v5` 鉴权，`log/slog` 结构化 JSON 日志
 - Docker Compose 一键部署基础设施
+
+### 项目结构
+```
+carbon-emission-management/
+├── cmd/api/                 # 入口：加载配置、依赖注入、优雅关闭
+├── internal/
+│   ├── config/              # YAML 配置 + DSN()/Addr() 构造
+│   ├── database/            # PostgreSQL 连接池
+│   ├── cache/               # Redis 客户端
+│   ├── model/               # 领域模型（20 个实体）
+│   ├── repository/          # 数据访问层：泛型 CRUD + 各实体 repo + 分析查询
+│   ├── handler/             # HTTP 处理器（真实数据库实现，替代 stub）
+│   ├── server/              # Gin 引擎 + 完整路由表
+│   ├── service/             # 服务上下文 + 健康检查
+│   └── middleware/          # 鉴权(JWT)、RBAC、CORS、API Key 鉴权
+├── pkg/                     # 可复用助手：response、logger、jwt、password
+├── configs/config.yaml      # 运行时配置
+├── sql/init.sql             # 完整 schema（20 张表）+ 种子数据
+├── Dockerfile               # 多阶段容器构建
+└── docker-compose.yml       # postgres + redis 栈
+```
 
 ### 快速开始
 ```bash
@@ -182,7 +215,22 @@ curl http://localhost:8080/health
 
 默认管理员账号（种子数据）：`admin` / `admin123`。
 
-API 端点详见上方英文版的表格。
+API 端点详见上方英文版的表格。主要模块：
+
+| 模块 | 说明 |
+|------|------|
+| 鉴权 | `POST /auth/login`（JWT 登录）、`POST /auth/register`、`GET /auth/profile` |
+| 组织/设施 | 组织与设施的完整 CRUD，支持按组织查询设施 |
+| 排放源/因子 | 排放源与排放因子管理 |
+| 排放记录 | CRUD + `POST /emission-records/calculate`（活动量×因子→CO2e） |
+| 碳信用 | CRUD + `POST /carbon-credits/:id/retire`（注销抵消） |
+| 减排目标 | 基准年/目标年/达成进度管理 |
+| 碳报告 | CRUD + `POST /reports/:id/generate`（聚合 scope1/2/3 生成报告） |
+| 分析 | 仪表盘、按范围、趋势、基线对比、设施级分布 |
+| 审计 | `GET /audit-logs`、`POST /audit-logs/:id/rollback`（管理员） |
+| 运营管理(v2) | 导入导出、定时任务、告警、通知、API Key、Webhook、附件、报告导出、回滚、系统设置 |
+
+所有列表端点支持 `?page=&page_size=` 分页，返回 `{data, total, page, page_size}`。除 `/auth/login`、`/auth/register` 外均需 JWT（或 `X-API-Key` 头）。
 
 ### 构建与测试
 ```bash
