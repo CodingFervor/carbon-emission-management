@@ -29,3 +29,18 @@ func NotFound(c *gin.Context, msg string) {
 func InternalError(c *gin.Context, msg string) {
 	c.JSON(http.StatusInternalServerError, R{Code: 500, Message: msg})
 }
+
+// PageResult wraps a paged collection with its total count and paging cursor.
+type PageResult struct {
+	Data     interface{} `json:"data"`
+	Total    int64       `json:"total"`
+	Page     int         `json:"page"`
+	PageSize int         `json:"page_size"`
+}
+
+// PageOK responds with a paged collection envelope.
+func PageOK(c *gin.Context, data interface{}, total int64, page, pageSize int) {
+	c.JSON(http.StatusOK, R{Code: 0, Message: "success", Data: PageResult{
+		Data: data, Total: total, Page: page, PageSize: pageSize,
+	}})
+}

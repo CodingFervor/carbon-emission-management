@@ -194,13 +194,171 @@ CREATE INDEX idx_audit_entity ON audit_logs(entity, entity_id);
 CREATE INDEX idx_audit_created ON audit_logs(created_at);
 
 -- =========================================================
+-- Ops & management features (10 new tables)
+-- =========================================================
+
+-- 1. Data imports / exports
+CREATE TABLE data_imports (
+    id              BIGSERIAL PRIMARY KEY,
+    organization_id BIGINT NOT NULL REFERENCES organizations(id),
+    type            VARCHAR(10) NOT NULL CHECK (type IN ('csv','excel')),
+    direction       VARCHAR(10) NOT NULL DEFAULT 'import' CHECK (direction IN ('import','export')),
+    target_entity   VARCHAR(50) NOT NULL,
+    file_path       VARCHAR(500),
+    status          VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','completed','failed')),
+    records_count   INT NOT NULL DEFAULT 0,
+    error_msg       TEXT,
+    started_by      BIGINT REFERENCES users(id),
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_data_imports_org ON data_imports(organization_id);
+CREATE INDEX idx_data_imports_status ON data_imports(status);
+
+-- 2. Scheduled tasks
+CREATE TABLE scheduled_tasks (
+    id              BIGSERIAL PRIMARY KEY,
+    organization_id BIGINT NOT NULL REFERENCES organizations(id),
+    name            VARCHAR(200) NOT NULL,
+    cron_expr       VARCHAR(50) NOT NULL,
+    target_endpoint VARCHAR(500) NOT NULL,
+    payload         TEXT,
+    status          VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused')),
+    last_run        TIMESTAMP,
+    next_run        TIMESTAMP,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_tasks_org ON scheduled_tasks(organization_id);
+CREATE INDEX idx_tasks_status ON scheduled_tasks(status);
+
+-- 3. Alerts
+CREATE TABLE alerts (
+    id              BIGSERIAL PRIMARY KEY,
+    organization_id BIGINT NOT NULL REFERENCES organizations(id),
+    facility_id     BIGINT REFERENCES facilities(id),
+    type            VARCHAR(20) NOT NULL CHECK (type IN ('threshold','anomaly','trend')),
+    severity        VARCHAR(10) NOT NULL DEFAULT 'warning' CHECK (severity IN ('info','warning','critical')),
+    message         TEXT NOT NULL,
+    trigger_value   DECIMAL(16,4) NOT NULL DEFAULT 0,
+    status          VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active','acknowledged','resolved')),
+    acked_by        BIGINT REFERENCES users(id),
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_alerts_org ON alerts(organization_id);
+CREATE INDEX idx_alerts_status ON alerts(status);
+
+-- 4. Notifications
+CREATE TABLE notifications (
+    id              BIGSERIAL PRIMARY KEY,
+    organization_id BIGINT NOT NULL REFERENCES organizations(id),
+    type            VARCHAR(10) NOT NULL CHECK (type IN ('email','sms','webhook')),
+    recipient       VARCHAR(200) NOT NULL,
+    subject         VARCHAR(200),
+    body            TEXT,
+    channel         VARCHAR(20) NOT NULL DEFAULT 'system' CHECK (channel IN ('system','alert','report')),
+    status          VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','failed')),
+    retries         INT NOT NULL DEFAULT 0,
+    sent_at         TIMESTAMP,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_notifications_org ON notifications(organization_id);
+CREATE INDEX idx_notifications_status ON notifications(status);
+
+-- 5. API keys
+CREATE TABLE api_keys (
+    id              BIGSERIAL PRIMARY KEY,
+    organization_id BIGINT NOT NULL REFERENCES organizations(id),
+    name            VARCHAR(200) NOT NULL,
+    key_hash        VARCHAR(64) NOT NULL UNIQUE,
+    key_prefix      VARCHAR(20) NOT NULL,
+    scopes          VARCHAR(200) NOT NULL DEFAULT 'read',
+    expires_at      TIMESTAMP,
+    last_used       TIMESTAMP,
+    status          VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_api_keys_org ON api_keys(organization_id);
+
+-- 6. Webhooks
+CREATE TABLE webhooks (
+    id              BIGSERIAL PRIMARY KEY,
+    organization_id BIGINT NOT NULL REFERENCES organizations(id),
+    url             VARCHAR(500) NOT NULL,
+    events          VARCHAR(500) NOT NULL,
+    secret          VARCHAR(200),
+    status          VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
+    failure_count   INT NOT NULL DEFAULT 0,
+    last_fired      TIMESTAMP,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_webhooks_org ON webhooks(organization_id);
+
+-- 7. Attachments
+CREATE TABLE attachments (
+    id          BIGSERIAL PRIMARY KEY,
+    entity_type VARCHAR(50) NOT NULL,
+    entity_id   BIGINT NOT NULL,
+    filename    VARCHAR(255) NOT NULL,
+    file_path   VARCHAR(500) NOT NULL,
+    file_size   BIGINT NOT NULL DEFAULT 0,
+    mime_type   VARCHAR(100),
+    uploaded_by BIGINT REFERENCES users(id),
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_attachments_entity ON attachments(entity_type, entity_id);
+
+-- 8. Report exports
+CREATE TABLE report_exports (
+    id           BIGSERIAL PRIMARY KEY,
+    report_id    BIGINT NOT NULL REFERENCES carbon_reports(id),
+    format       VARCHAR(10) NOT NULL CHECK (format IN ('pdf','excel')),
+    file_path    VARCHAR(500),
+    options      TEXT,
+    status       VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','generated','failed')),
+    generated_by BIGINT REFERENCES users(id),
+    created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_report_exports_report ON report_exports(report_id);
+
+-- 9. Rollback records
+CREATE TABLE rollback_records (
+    id            BIGSERIAL PRIMARY KEY,
+    audit_log_id  BIGINT NOT NULL REFERENCES audit_logs(id),
+    entity        VARCHAR(50) NOT NULL,
+    entity_id     BIGINT NOT NULL,
+    snapshot      TEXT NOT NULL,
+    rolled_back_by BIGINT REFERENCES users(id),
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_rollbacks_entity ON rollback_records(entity, entity_id);
+
+-- 10. System settings
+CREATE TABLE system_settings (
+    id          BIGSERIAL PRIMARY KEY,
+    key         VARCHAR(100) NOT NULL UNIQUE,
+    value       TEXT NOT NULL,
+    category    VARCHAR(50) NOT NULL DEFAULT 'general',
+    description VARCHAR(500),
+    data_type   VARCHAR(10) NOT NULL DEFAULT 'string' CHECK (data_type IN ('string','int','float','bool','json')),
+    updated_by  BIGINT REFERENCES users(id),
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_settings_category ON system_settings(category);
+
+-- =========================================================
 -- Seed data
 -- =========================================================
 INSERT INTO organizations (name, industry, country, reporting_year, base_year)
 VALUES ('GreenTech Industries', 'manufacturing', 'China', 2025, 2020);
 
 INSERT INTO users (username, password, email, role, organization_id)
-VALUES ('admin', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'admin@carbon.io', 'admin', 1);
+VALUES ('admin', '$2a$10$wW8.V3DjX8m9oNqZ4pK1kueQ0sR5tYvL7mZ2kJ.HxYcBnW3pKqL.C', 'admin@carbon.io', 'admin', 1);
 
 INSERT INTO facilities (organization_id, name, address, latitude, longitude, type, country)
 VALUES (1, 'Headquarters Plant', '88 Industrial Road, Shanghai', 31.2304000, 121.4737000, 'factory', 'China');
@@ -217,3 +375,18 @@ VALUES
     (1, 'Boiler A - Natural Gas', 1, 'stationary_combustion', 'natural_gas', 'm3'),
     (1, 'Forklift Fleet - Diesel', 1, 'mobile_combustion', 'diesel', 'L'),
     (1, 'Purchased Electricity',   2, 'electricity', 'electricity', 'kwh');
+
+-- System settings seed
+INSERT INTO system_settings (key, value, category, description, data_type) VALUES
+    ('default_reporting_standard', 'GHGP', 'general',     'Default ESG disclosure standard',  'string'),
+    ('alert_threshold_pct',        '10',   'alert',       'YoY emission increase alert (%)',  'int'),
+    ('notification_enabled',       'true', 'notification','Master switch for notifications',  'bool'),
+    ('auto_generate_reports',      'false','report',      'Auto-generate monthly reports',    'bool');
+
+-- Sample scheduled task
+INSERT INTO scheduled_tasks (organization_id, name, cron_expr, target_endpoint, status)
+VALUES (1, 'Monthly Emission Rollup', '0 0 1 * *', '/api/v1/internal/rollup', 'active');
+
+-- Sample alert
+INSERT INTO alerts (organization_id, facility_id, type, severity, message, trigger_value)
+VALUES (1, 1, 'threshold', 'warning', 'Natural gas consumption exceeded monthly budget by 12%', 12.0);

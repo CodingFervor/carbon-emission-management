@@ -16,6 +16,18 @@ An enterprise-grade carbon emission management platform for measuring, reporting
 - **Role-based access control** — admin / manager / analyst / viewer with JWT authentication
 - **Full audit trail** — every create/update/delete/retire action is logged for compliance
 
+**Ops & management (v2)**
+- **Data import/export** — CSV/Excel bulk jobs for any entity
+- **Scheduled tasks** — cron-driven recurring jobs with run/pause control
+- **Alerts & warnings** — threshold/anomaly/trend alerts with ack & resolve workflow
+- **Notifications** — email/sms/webhook dispatch with templates and retries
+- **API key management** — programmatic access scoped per organization (X-API-Key header)
+- **Webhook subscriptions** — event-driven outbound delivery with failure tracking
+- **File attachments** — polymorphic file storage linked to any entity
+- **Report exports** — render carbon reports to PDF/Excel
+- **Audit rollback** — snapshot-based undo of destructive changes (admin)
+- **System settings** — runtime configuration store grouped by category
+
 ### Tech Stack
 - Go 1.22 + Gin (HTTP framework)
 - PostgreSQL 16 (primary store) + Redis 7 (cache/queue)
@@ -26,17 +38,20 @@ An enterprise-grade carbon emission management platform for measuring, reporting
 ### Project Structure
 ```
 carbon-emission-management/
-├── cmd/api/                 # Entry point, route registration, handler stubs
+├── cmd/api/                 # Entry point: config load, DI, graceful shutdown
 ├── internal/
 │   ├── config/              # YAML config + DSN()/Addr() builders
 │   ├── database/            # PostgreSQL connection pool
 │   ├── cache/               # Redis client
-│   ├── model/               # Domain models (10 entities)
+│   ├── model/               # Domain models (20 entities)
+│   ├── repository/          # Data access: generic CRUD + per-entity repos + analytics
+│   ├── handler/             # HTTP handlers (real DB-backed, replaces stubs)
+│   ├── server/              # Gin engine + full route table
 │   ├── service/             # Service context + health checks
-│   └── middleware/          # Auth, RBAC, CORS
-├── pkg/                     # Reusable helpers: response, logger, jwt
+│   └── middleware/          # Auth (JWT), RBAC, CORS, API-key auth
+├── pkg/                     # Reusable helpers: response, logger, jwt, password
 ├── configs/config.yaml      # Runtime configuration
-├── sql/init.sql             # Full schema + seed data
+├── sql/init.sql             # Full schema (20 tables) + seed data
 ├── Dockerfile               # Multi-stage container build
 └── docker-compose.yml       # postgres + redis stack
 ```
@@ -86,6 +101,35 @@ Default admin credentials (seeded): `admin` / `admin123`.
 | GET | /api/v1/analytics/comparison | Baseline vs current |
 | GET | /api/v1/analytics/facility-breakdown | Emissions per facility |
 | GET | /api/v1/audit-logs | Audit trail (admin only) |
+
+#### Ops & Management (v2)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST/GET | /api/v1/data/imports | Create / list import jobs (CSV/Excel) |
+| POST | /api/v1/data/imports/:id/process | Process an import job |
+| GET | /api/v1/data/exports/:entity | Export an entity to CSV |
+| GET/POST | /api/v1/scheduled-tasks | List / create cron-driven tasks |
+| POST | /api/v1/scheduled-tasks/:id/run | Trigger a task immediately |
+| POST | /api/v1/scheduled-tasks/:id/pause | Pause a task |
+| GET/POST | /api/v1/alerts | List / create alerts |
+| POST | /api/v1/alerts/:id/acknowledge | Acknowledge an alert |
+| POST | /api/v1/alerts/:id/resolve | Resolve an alert |
+| GET/POST | /api/v1/notifications | List / create notifications |
+| POST | /api/v1/notifications/:id/send | Dispatch a notification |
+| GET | /api/v1/notifications/templates | Message templates |
+| GET/POST | /api/v1/api-keys | List / create API keys |
+| POST | /api/v1/api-keys/:id/revoke | Revoke an API key |
+| GET/POST | /api/v1/webhooks | List / create webhook subscriptions |
+| POST | /api/v1/webhooks/:id/test | Fire a test delivery |
+| GET/POST | /api/v1/attachments | List / create attachments |
+| DELETE | /api/v1/attachments/:id | Delete an attachment |
+| GET | /api/v1/report-exports | List report exports |
+| POST | /api/v1/reports/:id/export | Render a report to PDF/Excel |
+| GET | /api/v1/rollbacks | List rollback records (admin) |
+| POST | /api/v1/audit-logs/:id/rollback | Roll back a change (admin) |
+| GET/POST | /api/v1/settings | List / create system settings |
+| PUT/DELETE | /api/v1/settings/:id | Update / delete a setting |
 
 ### Build & Test
 ```bash
