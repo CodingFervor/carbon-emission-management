@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
+
+	"github.com/CodingFervor/carbon-emission-management/pkg/logger"
 )
 
 // Page holds the parameters of a paged query.
@@ -58,7 +61,7 @@ func NewGenericRepo[T any](db *sql.DB, table string, dest func() *T) *GenericRep
 	return r
 }
 
-func (r *GenericRepo[T]) DB() *sql.DB { return r.db }
+func (r *GenericRepo[T]) DB() *sql.DB   { return r.db }
 func (r *GenericRepo[T]) Table() string { return r.table }
 
 // Count returns the total number of rows matching an optional WHERE clause.
@@ -145,35 +148,53 @@ func structColumns(v any) []string {
 
 // scanRow scans a single *sql.Row into dest using the given columns.
 func scanRow[T any](dest *T, row *sql.Row, cols []string) (*T, error) {
-	ptrs := structPtrs(dest, cols)
+	ptrs, finalize := structPtrs(dest, cols)
 	if err := row.Scan(ptrs...); err != nil {
 		return nil, err
 	}
+	finalize()
 	return dest, nil
 }
 
 // scanRows iterates rows scanning each into a fresh dest, returning the slice.
+// Scan errors are logged (not silently dropped) so NULL-handling bugs surface.
 func scanRows[T any](rows *sql.Rows, dest func() *T, cols []string) []T {
 	out := []T{}
 	for rows.Next() {
 		d := dest()
-		ptrs := structPtrs(d, cols)
+		ptrs, finalize := structPtrs(d, cols)
 		if err := rows.Scan(ptrs...); err != nil {
+			logger.Error("row scan failed; skipping row", "columns", strings.Join(cols, ","), "error", err)
 			continue
 		}
+		finalize()
 		out = append(out, *d)
 	}
 	return out
 }
 
-// structPtrs returns pointers to the struct fields matching cols, in order.
-// "id","created_at","updated_at" and any field with a `db` tag are matched.
-func structPtrs(v any, cols []string) []any {
+// nullLink pairs a nullable struct pointer field with the sql.NullXxx value
+// that receives its scan result, plus the kind used to dematerialize it.
+type nullLink struct {
+	field   reflect.Value
+	scanner any // pointer to sql.NullTime / sql.NullInt64 / sql.NullFloat64 / sql.NullString
+	kind    reflect.Kind
+}
+
+// structPtrs builds the scan-target pointers for the columns of struct v.
+// It returns the slice of pointers (handed to rows.Scan) plus a finalize
+// callback that must be invoked AFTER a successful Scan to copy nullable
+// bridge values back into the struct's pointer fields. Non-pointer fields
+// are scanned directly.
+//
+// This is what makes nullable columns (*time.Time, *int64, *float64, *string)
+// safe: instead of passing a **T (which pq cannot scan NULL into), we scan
+// into a sql.NullXxx and materialize the pointer after the fact.
+func structPtrs(v any, cols []string) ([]any, func()) {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Ptr {
 		rv = rv.Elem()
 	}
-	// Map db-tag -> field index.
 	tagIdx := map[string]int{}
 	t := rv.Type()
 	for i := 0; i < t.NumField(); i++ {
@@ -182,24 +203,82 @@ func structPtrs(v any, cols []string) []any {
 			tagIdx[tag] = i
 		}
 	}
+
+	timeType := reflect.TypeOf(time.Time{})
+	var links []nullLink
 	ptrs := make([]any, 0, len(cols))
+
 	for _, c := range cols {
 		idx, ok := tagIdx[c]
 		if !ok {
-			// Unknown column: provide a throwaway *sql.RawBytes so Scan doesn't fail.
 			var dummy sql.NullString
 			ptrs = append(ptrs, &dummy)
 			continue
 		}
 		f := rv.Field(idx)
-		if f.CanAddr() {
+		switch {
+		case f.Kind() == reflect.Ptr && f.CanSet() && f.Type().Elem() == timeType:
+			nb := &sql.NullTime{}
+			ptrs = append(ptrs, nb)
+			links = append(links, nullLink{field: f, scanner: nb, kind: reflect.Interface})
+		case f.Kind() == reflect.Ptr && f.CanSet() && f.Type().Elem().Kind() == reflect.Int64:
+			nb := &sql.NullInt64{}
+			ptrs = append(ptrs, nb)
+			links = append(links, nullLink{field: f, scanner: nb, kind: reflect.Int64})
+		case f.Kind() == reflect.Ptr && f.CanSet() && f.Type().Elem().Kind() == reflect.Float64:
+			nb := &sql.NullFloat64{}
+			ptrs = append(ptrs, nb)
+			links = append(links, nullLink{field: f, scanner: nb, kind: reflect.Float64})
+		case f.Kind() == reflect.Ptr && f.CanSet() && f.Type().Elem().Kind() == reflect.String:
+			nb := &sql.NullString{}
+			ptrs = append(ptrs, nb)
+			links = append(links, nullLink{field: f, scanner: nb, kind: reflect.String})
+		case f.CanAddr():
 			ptrs = append(ptrs, f.Addr().Interface())
-		} else {
+		default:
 			var dummy sql.NullString
 			ptrs = append(ptrs, &dummy)
 		}
 	}
-	return ptrs
+
+	return ptrs, func() {
+		for _, ln := range links {
+			switch ln.kind {
+			case reflect.Interface: // *time.Time
+				nb := ln.scanner.(*sql.NullTime)
+				if nb.Valid {
+					v := nb.Time
+					ln.field.Set(reflect.ValueOf(&v))
+				} else {
+					ln.field.Set(reflect.Zero(ln.field.Type()))
+				}
+			case reflect.Int64:
+				nb := ln.scanner.(*sql.NullInt64)
+				if nb.Valid {
+					v := nb.Int64
+					ln.field.Set(reflect.ValueOf(&v))
+				} else {
+					ln.field.Set(reflect.Zero(ln.field.Type()))
+				}
+			case reflect.Float64:
+				nb := ln.scanner.(*sql.NullFloat64)
+				if nb.Valid {
+					v := nb.Float64
+					ln.field.Set(reflect.ValueOf(&v))
+				} else {
+					ln.field.Set(reflect.Zero(ln.field.Type()))
+				}
+			case reflect.String:
+				nb := ln.scanner.(*sql.NullString)
+				if nb.Valid {
+					v := nb.String
+					ln.field.Set(reflect.ValueOf(&v))
+				} else {
+					ln.field.Set(reflect.Zero(ln.field.Type()))
+				}
+			}
+		}
+	}
 }
 
 // Exec is a thin helper around db.Exec for custom statements.

@@ -23,12 +23,14 @@ func (r *UserRepo) FindByUsername(username string) (*model.User, error) {
 	cols := r.columns
 	q := "SELECT " + join(cols) + " FROM users WHERE username = $1"
 	u := &model.User{}
-	if err := r.DB().QueryRow(q, username).Scan(structPtrs(u, cols)...); err != nil {
+	ptrs, finalize := structPtrs(u, cols)
+	if err := r.DB().QueryRow(q, username).Scan(ptrs...); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrUserNotFound
 		}
 		return nil, err
 	}
+	finalize()
 	return u, nil
 }
 

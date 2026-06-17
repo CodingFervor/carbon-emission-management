@@ -12,8 +12,12 @@ type R struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-func OK(c *gin.Context, data interface{})      { c.JSON(http.StatusOK, R{Code: 0, Message: "success", Data: data}) }
-func Created(c *gin.Context, data interface{}) { c.JSON(http.StatusCreated, R{Code: 0, Message: "created", Data: data}) }
+func OK(c *gin.Context, data interface{}) {
+	c.JSON(http.StatusOK, R{Code: 0, Message: "success", Data: data})
+}
+func Created(c *gin.Context, data interface{}) {
+	c.JSON(http.StatusCreated, R{Code: 0, Message: "created", Data: data})
+}
 func Fail(c *gin.Context, code int, msg string) {
 	c.JSON(http.StatusBadRequest, R{Code: code, Message: msg})
 }

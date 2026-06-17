@@ -495,7 +495,7 @@ func (h *Handler) ExportReport(c *gin.Context) {
 	uid := userIDOf(c)
 	e := &model.ReportExport{
 		ReportID: id, Format: format, Status: "pending",
-		FilePath: "exports/report_" + strconv.FormatInt(id, 10) + "." + format,
+		FilePath:    "exports/report_" + strconv.FormatInt(id, 10) + "." + format,
 		GeneratedBy: &uid,
 	}
 	if err := h.Export.Create(e); err != nil {
